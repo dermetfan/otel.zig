@@ -1,0 +1,27 @@
+.{
+    .name = "otel",
+    .version = "0.0.0",
+    .dependencies = .{
+        .protobuf = .{
+            .url = "https://github.com/Arwalk/zig-protobuf/archive/8b47dc349a36a42c1827f6d83ec05d8130376061.tar.gz",
+            .hash = "122010e351b1d81348b87a913111e238dd555ff087a0a3dcd42ab7ca30cb8fa9076d",
+        },
+        .@"opentelemetry-proto" = .{
+            .url = "https://github.com/open-telemetry/opentelemetry-proto/archive/refs/tags/v1.3.2.tar.gz",
+            .hash = "122089fe2a917c05d4944ead1e926d553088e45fc30a7b985dbf806f18e0f7f0cee0",
+        },
+        .googleapis = .{
+            .url = "https://github.com/googleapis/googleapis/archive/40bc86036e483ab04e5bc83ac7519e15d68cbd05.tar.gz",
+            .hash = "1220239ce3c0f33bcd41fe9c69b0ce3da5b819b67d288cba2d652bb0e27c0ad69452",
+        },
+        .utils = .{
+            .url = "https://github.com/dermetfan/utils.zig/archive/6ccb68f3a580ac410cf4bcbee36640d9b775f199.tar.gz",
+            .hash = "12206e36547ef3e40d75496f5c6279b41538dd14186e291f220603001ed712901f90",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
