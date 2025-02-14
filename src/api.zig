@@ -5,61 +5,69 @@ const utils = @import("utils");
 pub const trace = @import("api/trace.zig");
 
 /// https://opentelemetry.io/docs/specs/otel/common/#attribute
-pub const Attributes = std.ArrayHashMapUnmanaged([]const u8, AttributeValue, struct {
-    pub fn hash(_: @This(), key: []const u8) u32 {
-        return @truncate(std.hash_map.hashString(key));
-    }
+pub const Attributes = struct {
+    map: Map = .{},
 
-    pub fn eql(_: @This(), a: []const u8, b: []const u8, _: usize) bool {
-        return std.hash_map.eqlString(a, b);
-    }
-}, false);
-
-/// https://opentelemetry.io/docs/specs/otel/common/#attribute
-pub const AttributeValue = union(enum) {
-    one: Primitive,
-    many: utils.meta.MapFields(Primitive, struct {
-        fn map(field: utils.meta.FieldInfo(Primitive)) utils.meta.FieldInfo(Primitive) {
-            var f = field;
-            // XXX Would it be better if this was just a slice?
-            f.type = std.ArrayListUnmanaged(field.type);
-            return f;
+    pub const Map = std.ArrayHashMapUnmanaged([]const u8, Value, struct {
+        pub fn hash(_: @This(), key: []const u8) u32 {
+            return @truncate(std.hash_map.hashString(key));
         }
-    }.map),
 
-    pub const Primitive = union(enum) {
-        string: []const u8,
-        bool: bool,
-        float: f64,
-        int: i64,
-    };
+        pub fn eql(_: @This(), a: []const u8, b: []const u8, _: usize) bool {
+            return std.hash_map.eqlString(a, b);
+        }
+    }, false);
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        self.map.deinit(allocator);
+        self.* = undefined;
+    }
 
     pub fn jsonStringify(self: @This(), write_stream: anytype) !void {
-        switch (self) {
-            .one => |one| try write_stream.write(one),
-            .many => |many| switch (many) {
-                inline else => |primitives| {
-                    try write_stream.beginArray();
-                    for (primitives.items) |primitive|
-                        try write_stream.write(primitive);
-                    try write_stream.endArray();
-                },
-            },
+        try write_stream.beginObject();
+
+        var iter = self.map.iterator();
+        while (iter.next()) |attribute| {
+            try write_stream.objectField(attribute.key_ptr.*);
+            try write_stream.write(attribute.value_ptr.*);
         }
+
+        try write_stream.endObject();
     }
+
+    pub const Value = union(enum) {
+        one: Primitive,
+        many: utils.meta.MapFields(Primitive, struct {
+            fn map(field: utils.meta.FieldInfo(Primitive)) utils.meta.FieldInfo(Primitive) {
+                var f = field;
+                // XXX Would it be better if this was just a slice?
+                f.type = std.ArrayListUnmanaged(field.type);
+                return f;
+            }
+        }.map),
+
+        pub const Primitive = union(enum) {
+            string: []const u8,
+            bool: bool,
+            float: f64,
+            int: i64,
+        };
+
+        pub fn jsonStringify(self: @This(), write_stream: anytype) !void {
+            switch (self) {
+                .one => |one| try write_stream.write(one),
+                .many => |many| switch (many) {
+                    inline else => |primitives| {
+                        try write_stream.beginArray();
+                        for (primitives.items) |primitive|
+                            try write_stream.write(primitive);
+                        try write_stream.endArray();
+                    },
+                },
+            }
+        }
+    };
 };
-
-pub fn jsonStringifyAttributes(self: Attributes, write_stream: anytype) !void {
-    try write_stream.beginObject();
-
-    var iter = self.iterator();
-    while (iter.next()) |attribute| {
-        try write_stream.objectField(attribute.key_ptr.*);
-        try write_stream.write(attribute.value_ptr.*);
-    }
-
-    try write_stream.endObject();
-}
 
 /// https://opentelemetry.io/docs/specs/otel/glossary/#instrumentation-scope
 pub const InstrumentationScope = struct {
@@ -87,7 +95,7 @@ pub const InstrumentationScope = struct {
             try write_stream.write(null);
 
         try write_stream.objectField("attributes");
-        try jsonStringifyAttributes(self.attributes, write_stream);
+        try write_stream.write(self.attributes);
 
         try write_stream.endObject();
     }

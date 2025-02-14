@@ -220,7 +220,7 @@ pub fn Span(comptime Impl: type) type {
 
         /// https://opentelemetry.io/docs/specs/otel/trace/api/#set-attributes
         /// Do not forget to clone arguments with `arena()` if needed.
-        pub fn setAttribute(self: *@This(), key: []const u8, value: api.AttributeValue) std.mem.Allocator.Error!void {
+        pub fn setAttribute(self: *@This(), key: []const u8, value: api.Attributes.Value) std.mem.Allocator.Error!void {
             if (!self.isRecording()) return;
             try self.impl.setAttribute(key, value);
         }
@@ -232,7 +232,7 @@ pub fn Span(comptime Impl: type) type {
             if (std.meta.hasMethod(Impl, "setAttributes"))
                 try self.impl.setAttributes(attributes)
             else {
-                var iter = attributes.iterator();
+                var iter = attributes.map.iterator();
                 while (iter.next()) |attribute|
                     try self.impl.setAttribute(attribute.key_ptr.*, attribute.value_ptr.*);
             }
@@ -480,8 +480,8 @@ pub const SpanEvent = struct {
         var attributes = api.Attributes{};
         errdefer attributes.deinit(allocator);
 
-        try attributes.put(allocator, "exception.type", .{ .one = .{ .string = @errorName(err) } });
-        try attributes.put(allocator, "exception.escaped", .{ .one = .{ .bool = escaped } });
+        try attributes.map.put(allocator, "exception.type", .{ .one = .{ .string = @errorName(err) } });
+        try attributes.map.put(allocator, "exception.escaped", .{ .one = .{ .bool = escaped } });
         if (error_return_trace) |ert| {
             const string = string: {
                 var string = std.ArrayListUnmanaged(u8){};
@@ -493,7 +493,7 @@ pub const SpanEvent = struct {
             };
             errdefer allocator.free(string);
 
-            try attributes.put(allocator, "exception.stacktrace", .{ .one = .{ .string = string } });
+            try attributes.map.put(allocator, "exception.stacktrace", .{ .one = .{ .string = string } });
         }
 
         return .{
@@ -502,38 +502,11 @@ pub const SpanEvent = struct {
             .attributes = attributes,
         };
     }
-
-    pub fn jsonStringify(self: @This(), write_stream: anytype) !void {
-        try write_stream.beginObject();
-
-        try write_stream.objectField("name");
-        try write_stream.write(self.name);
-
-        try write_stream.objectField("timestamp_ns");
-        try write_stream.write(self.timestamp_ns);
-
-        try write_stream.objectField("attributes");
-        try api.jsonStringifyAttributes(self.attributes, write_stream);
-
-        try write_stream.endObject();
-    }
 };
 
 pub const SpanLink = struct {
     context: SpanContext,
     attributes: api.Attributes = .{},
-
-    pub fn jsonStringify(self: @This(), write_stream: anytype) !void {
-        try write_stream.beginObject();
-
-        try write_stream.objectField("context");
-        try write_stream.write(self.context);
-
-        try write_stream.objectField("attributes");
-        try api.jsonStringifyAttributes(self.attributes, write_stream);
-
-        try write_stream.endObject();
-    }
 };
 
 /// https://opentelemetry.io/docs/specs/otel/trace/api/#wrapping-a-spancontext-in-a-span
@@ -568,7 +541,7 @@ const NonRecordingSpan = struct {
         return false;
     }
 
-    pub fn setAttribute(_: *@This(), _: []const u8, _: api.AttributeValue) !void {}
+    pub fn setAttribute(_: *@This(), _: []const u8, _: api.Attributes.Value) !void {}
     pub fn addEvent(_: *@This(), _: SpanEvent) !void {}
     pub fn addLink(_: *@This(), _: SpanLink) !void {}
     pub fn setStatus(_: *@This(), _: SpanStatus) void {}

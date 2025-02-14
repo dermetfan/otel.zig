@@ -15,8 +15,6 @@ const api = api: {
         usingnamespace toplevel.trace;
 
         const Attributes = toplevel.Attributes;
-        const AttributeValue = toplevel.AttributeValue;
-        const jsonStringifyAttributes = toplevel.jsonStringifyAttributes;
         const InstrumentationScope = toplevel.InstrumentationScope;
     };
 };
@@ -270,8 +268,8 @@ const RecordingSpan = struct {
         return self.context;
     }
 
-    pub fn setAttribute(self: *@This(), key: []const u8, value: api.AttributeValue) !void {
-        try self.attributes.put(self.arena(), key, value);
+    pub fn setAttribute(self: *@This(), key: []const u8, value: api.Attributes.Value) !void {
+        try self.attributes.map.put(self.arena(), key, value);
     }
 
     pub fn isRecording(self: @This()) bool {
@@ -310,42 +308,19 @@ const RecordingSpan = struct {
     }
 
     pub fn jsonStringify(self: @This(), write_stream: anytype) !void {
-        try write_stream.beginObject();
-
-        try write_stream.objectField("scope");
-        try write_stream.write(self.instrumentation_scope.*);
-
-        try write_stream.objectField("name");
-        try write_stream.write(self.name);
-
-        try write_stream.objectField("context");
-        try write_stream.write(self.context);
-
-        try write_stream.objectField("parent");
-        try write_stream.write(self.parent);
-
-        try write_stream.objectField("kind");
-        try write_stream.write(self.kind);
-
-        try write_stream.objectField("start_ns");
-        try write_stream.write(self.start_ns);
-
-        try write_stream.objectField("end_ns");
-        try write_stream.write(self.end_ns);
-
-        try write_stream.objectField("attributes");
-        try api.jsonStringifyAttributes(self.attributes, write_stream);
-
-        try write_stream.objectField("links");
-        try write_stream.write(self.links.items);
-
-        try write_stream.objectField("events");
-        try write_stream.write(self.events.items);
-
-        try write_stream.objectField("status");
-        try write_stream.write(self.status);
-
-        try write_stream.endObject();
+        try write_stream.write(.{
+            .scope = self.instrumentation_scope,
+            .name = self.name,
+            .context = self.context,
+            .parent = self.parent,
+            .kind = self.kind,
+            .start_ns = self.start_ns,
+            .end_ns = self.end_ns,
+            .attributes = self.attributes,
+            .links = self.links.items,
+            .events = self.events.items,
+            .status = self.status,
+        });
     }
 };
 
@@ -1545,7 +1520,7 @@ fn testSpan(tracer: anytype) !Span {
         // Probably because the compiler copies `arena` for the `span()` function parameter
         // before it calls `arena.allocator()` to construct the `attrs` and `links`.
 
-        const attrs = try api.Attributes.init(
+        const attrs = api.Attributes{ .map = try api.Attributes.Map.init(
             arena.allocator(),
             &.{ "foo", "bar" },
             &.{
@@ -1554,18 +1529,18 @@ fn testSpan(tracer: anytype) !Span {
                     try arena.allocator().dupe([]const u8, &.{ "bar1", "bar2" }),
                 ) } },
             },
-        );
+        ) };
 
         const links = try arena.allocator().dupe(api.SpanLink, &.{.{
             .context = .{
                 .trace_id = .{ .bytes = std.mem.toBytes(std.mem.nativeToBig(SequentialIdGenerator.IdInt(w3c_trace_context.TraceParent.TraceId), 0xBEEF)) },
                 .span_id = .{ .bytes = std.mem.toBytes(std.mem.nativeToBig(SequentialIdGenerator.IdInt(w3c_trace_context.TraceParent.ParentId), 0xDEAD)) },
             },
-            .attributes = try api.Attributes.init(
+            .attributes = .{ .map = try api.Attributes.Map.init(
                 arena.allocator(),
                 &.{"baz"},
                 &.{.{ .one = .{ .string = "baz" } }},
-            ),
+            ) },
         }});
 
         break :span try tracer.span(arena, "test", .{

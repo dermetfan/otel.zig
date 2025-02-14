@@ -13,23 +13,25 @@ schema_url: ?std.Uri = null,
 /// https://opentelemetry.io/docs/specs/otel/resource/sdk/#sdk-provided-resource-attributes
 pub fn default(allocator: std.mem.Allocator, service_name: []const u8) std.mem.Allocator.Error!@This() {
     return .{
-        .attributes = try api.Attributes.init(
-            allocator,
-            &.{
-                "service.name",
-                "telemetry.sdk.language",
-                "telemetry.sdk.name",
-                "telemetry.sdk.version",
-            },
-            &.{
-                .{ .one = .{ .string = service_name } },
-                .{ .one = .{ .string = "zig" } },
-                .{ .one = .{ .string = "opentelemetry" } },
-                // XXX do this once the compiler supports it
-                // @import("../../../build.zig.zon").version
-                .{ .one = .{ .string = "0.0.0" } },
-            },
-        ),
+        .attributes = .{
+            .map = try api.Attributes.Map.init(
+                allocator,
+                &.{
+                    "service.name",
+                    "telemetry.sdk.language",
+                    "telemetry.sdk.name",
+                    "telemetry.sdk.version",
+                },
+                &.{
+                    .{ .one = .{ .string = service_name } },
+                    .{ .one = .{ .string = "zig" } },
+                    .{ .one = .{ .string = "opentelemetry" } },
+                    // XXX do this once the compiler supports it
+                    // @import("../../../build.zig.zon").version
+                    .{ .one = .{ .string = "0.0.0" } },
+                },
+            ),
+        },
     };
 }
 

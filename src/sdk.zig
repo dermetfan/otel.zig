@@ -11,10 +11,10 @@ pub const Resource = @import("sdk/Resource.zig");
 
 pub const to_otlp = struct {
     pub fn attributes(allocator: std.mem.Allocator, attrs: api.Attributes, dupe: bool) std.mem.Allocator.Error!otlp.common.KeyValueList {
-        var kvs = otlp.common.KeyValueList{ .values = try std.ArrayList(otlp.common.KeyValue).initCapacity(allocator, attrs.count()) };
+        var kvs = otlp.common.KeyValueList{ .values = try std.ArrayList(otlp.common.KeyValue).initCapacity(allocator, attrs.map.count()) };
         errdefer kvs.deinit();
 
-        var attributes_iter = attrs.iterator();
+        var attributes_iter = attrs.map.iterator();
         while (attributes_iter.next()) |attribute|
             kvs.values.appendAssumeCapacity(.{
                 .key = if (dupe)
@@ -27,7 +27,7 @@ pub const to_otlp = struct {
         return kvs;
     }
 
-    pub fn attributeValue(allocator: std.mem.Allocator, attribute_value: api.AttributeValue, dupe: bool) std.mem.Allocator.Error!otlp.common.AnyValue {
+    pub fn attributeValue(allocator: std.mem.Allocator, attribute_value: api.Attributes.Value, dupe: bool) std.mem.Allocator.Error!otlp.common.AnyValue {
         return .{
             .value = switch (attribute_value) {
                 .one => |primitive| switch (primitive) {
@@ -56,7 +56,7 @@ pub const to_otlp = struct {
                             array.values.appendAssumeCapacity(
                                 try attributeValue(allocator, .{
                                     .one = @unionInit(
-                                        api.AttributeValue.Primitive,
+                                        api.Attributes.Value.Primitive,
                                         @tagName(tag),
                                         primitive,
                                     ),
