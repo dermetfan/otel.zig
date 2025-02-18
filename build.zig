@@ -53,6 +53,7 @@ pub fn build(b: *Build) !void {
             .imports = &.{
                 .{ .name = "protobuf", .module = b.dependency("protobuf", options).module("protobuf") },
                 .{ .name = "utils", .module = b.dependency("utils", options).module("utils") },
+                .{ .name = "retry", .module = b.dependency("retry", options).module("retry") },
             },
         });
     };

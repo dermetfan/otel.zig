@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const utils = @import("utils");
+const retry = @import("retry");
 
 pub const collector = struct {
     pub const trace = @import("opentelemetry/proto/collector/trace/v1.pb.zig");
@@ -307,6 +308,8 @@ pub const Exporter = struct {
         http_protobuf: std.http.Client,
         http_json: std.http.Client,
     },
+    /// https://opentelemetry.io/docs/specs/otel/protocol/exporter/#retry
+    retry_policy: retry.Policy = .{},
 
     pub fn deinit(self: *@This()) void {
         switch (self.protocol) {
@@ -320,6 +323,7 @@ pub const Exporter = struct {
 
     pub const ExportError = ExportHttpError;
     pub const ExportHttpError =
+        std.time.Timer.Error ||
         ParseHttpResponseBodyError ||
         std.http.Client.Request.WaitError ||
         std.http.Client.Request.FinishError ||
@@ -365,7 +369,10 @@ pub const Exporter = struct {
         /// Will only be valid when one of `error{ClientError, ServerError}` is returned!
         diagnostics: ?*rpc.Status,
     ) ExportHttpError!S.Response() {
-        // _ = timeout_ms; // XXX how to implement this?
+        var timer = if (timeout_ms != null)
+            try std.time.Timer.start()
+        else
+            null;
 
         const client = switch (self.protocol) {
             else => unreachable,
@@ -382,121 +389,136 @@ pub const Exporter = struct {
                 .value = @tagName(compression),
             });
 
-        // TODO use HTTP/2
-        var request = try client.open(.POST, self.endpoint, .{
-            .server_header_buffer = server_header_buffer: {
-                var buffer: [16 * utils.mem.b_per_kib]u8 = undefined;
-                break :server_header_buffer &buffer;
-            },
-            .headers = .{
-                .user_agent = .{ .override = user_agent },
-                .content_type = switch (self.protocol) {
-                    else => unreachable,
-                    .http_protobuf => .{ .override = "application/x-protobuf" },
-                    .http_json => .{ .override = "application/json" },
+        var backoffs = self.retry_policy.backoffs();
+        retry: while (true) {
+            var request = try client.open(.POST, self.endpoint, .{
+                .server_header_buffer = server_header_buffer: {
+                    var buffer: [16 * utils.mem.b_per_kib]u8 = undefined;
+                    break :server_header_buffer &buffer;
                 },
-            },
-            .extra_headers = extra_headers.items,
-        });
-        defer request.deinit();
-
-        request.transfer_encoding = .chunked;
-
-        try request.send();
-
-        // Unfortunately we cannot write directly into `request.writer()`
-        // because zig-protobuf can only write to `ArrayList(u8).Writer`
-        // because it needs to allocate to base64-encode strings.
-        // XXX Zig 0.14.0 added `std.base64.Base64Encoder.encodeWriter()`
-        // which could be used to fix this in zig-protobuf. Open PR?
-        if (true) {
-            var body_str = std.ArrayList(u8).init(allocator);
-            defer body_str.deinit();
-
-            switch (self.protocol) {
-                else => unreachable,
-                .http_protobuf => {
-                    const signal_encoded = try signal.encode(allocator);
-                    defer allocator.free(signal_encoded);
-
-                    try body_str.appendSlice(signal_encoded);
-                },
-                .http_json => try std.json.stringify(signal, .{}, body_str.writer()),
-            }
-
-            if (self.compression) |compression| {
-                var body_str_stream = std.io.fixedBufferStream(body_str.items);
-                switch (compression) {
-                    .gzip => try std.compress.gzip.compress(body_str_stream.reader(), request.writer(), .{}),
-                }
-            } else try request.writer().writeAll(body_str.items);
-        } else {
-            var body_compressor = if (self.compression) |compression|
-                switch (compression) {
-                    .gzip => try std.compress.gzip.compressor(request.writer(), .{}),
-                }
-            else
-                null;
-
-            const body_writer: union(enum) {
-                compress: @typeInfo(@TypeOf(body_compressor)).Optional.child.Writer,
-                raw: std.http.Client.Request.Writer,
-            } = if (body_compressor) |*compressor|
-                .{ .compress = compressor.writer() }
-            else
-                .{ .raw = request.writer() };
-
-            switch (self.protocol) {
-                else => unreachable,
-                .http_protobuf => {
-                    const body_str = try signal.encode(allocator);
-                    defer allocator.free(body_str);
-
-                    switch (body_writer) {
-                        inline else => |writer| try writer.writeAll(body_str),
-                    }
-                },
-                .http_json => switch (body_writer) {
-                    inline else => |writer| try std.json.stringify(signal, .{}, writer),
-                },
-            }
-
-            if (body_compressor) |*compressor|
-                try compressor.finish();
-        }
-        try request.finish();
-
-        try request.wait();
-        switch (request.response.status.class()) {
-            inline .client_error, .server_error => |class| {
-                switch (request.response.status) {
-                    .too_many_requests, .bad_gateway, .service_unavailable, .gateway_timeout => {
-                        var headers_iter = request.response.iterateHeaders();
-                        while (headers_iter.next()) |header| {
-                            if (!std.ascii.eqlIgnoreCase(header.name, "Retry-After")) continue;
-
-                            // The spec reads like only a number of seconds is allowed,
-                            // not an HTTP date as is also allowed by the HTTP spec.
-                            const delay_s = try std.fmt.parseUnsigned(u64, header.value, 10);
-                            std.time.sleep(delay_s * std.time.ns_per_s);
-                            return self.exportHttp(allocator, S, signal, timeout_ms, diagnostics); // XXX loop instead
-                        }
-
-                        // TODO exponential backoff with jitter
+                .headers = .{
+                    .user_agent = .{ .override = user_agent },
+                    .content_type = switch (self.protocol) {
+                        else => unreachable,
+                        .http_protobuf => .{ .override = "application/x-protobuf" },
+                        .http_json => .{ .override = "application/json" },
                     },
-                    else => {},
+                },
+                .extra_headers = extra_headers.items,
+            });
+            defer request.deinit();
+
+            request.transfer_encoding = .chunked;
+
+            try request.send();
+
+            // Unfortunately we cannot write directly into `request.writer()`
+            // because zig-protobuf can only write to `ArrayList(u8).Writer`
+            // because it needs to allocate to base64-encode strings.
+            // XXX Zig 0.14.0 added `std.base64.Base64Encoder.encodeWriter()`
+            // which could be used to fix this in zig-protobuf. Open PR?
+            if (true) {
+                var body_str = std.ArrayList(u8).init(allocator);
+                defer body_str.deinit();
+
+                switch (self.protocol) {
+                    else => unreachable,
+                    .http_protobuf => {
+                        const signal_encoded = try signal.encode(allocator);
+                        defer allocator.free(signal_encoded);
+
+                        try body_str.appendSlice(signal_encoded);
+                    },
+                    .http_json => try std.json.stringify(signal, .{}, body_str.writer()),
                 }
 
-                if (diagnostics) |d|
-                    d.* = try parseHttpResponseBody(rpc.Status, allocator, &request, .{});
+                if (self.compression) |compression| {
+                    var body_str_stream = std.io.fixedBufferStream(body_str.items);
+                    switch (compression) {
+                        .gzip => try std.compress.gzip.compress(body_str_stream.reader(), request.writer(), .{}),
+                    }
+                } else try request.writer().writeAll(body_str.items);
+            } else {
+                var body_compressor = if (self.compression) |compression|
+                    switch (compression) {
+                        .gzip => try std.compress.gzip.compressor(request.writer(), .{}),
+                    }
+                else
+                    null;
 
-                return switch (class) {
-                    else => comptime unreachable,
-                    .client_error => error.ClientError,
-                    .server_error => error.ServerError,
-                };
-            },
-            else => return try parseHttpResponseBody(S.Response(), allocator, &request, .{}),
+                const body_writer: union(enum) {
+                    compress: @typeInfo(@TypeOf(body_compressor)).Optional.child.Writer,
+                    raw: std.http.Client.Request.Writer,
+                } = if (body_compressor) |*compressor|
+                    .{ .compress = compressor.writer() }
+                else
+                    .{ .raw = request.writer() };
+
+                switch (self.protocol) {
+                    else => unreachable,
+                    .http_protobuf => {
+                        const body_str = try signal.encode(allocator);
+                        defer allocator.free(body_str);
+
+                        switch (body_writer) {
+                            inline else => |writer| try writer.writeAll(body_str),
+                        }
+                    },
+                    .http_json => switch (body_writer) {
+                        inline else => |writer| try std.json.stringify(signal, .{}, writer),
+                    },
+                }
+
+                if (body_compressor) |*compressor|
+                    try compressor.finish();
+            }
+            try request.finish();
+
+            try request.wait();
+            switch (request.response.status.class()) {
+                inline .client_error, .server_error => |class| {
+                    switch (request.response.status) {
+                        .too_many_requests, .bad_gateway, .service_unavailable, .gateway_timeout => if (backoffs.next()) |backoff_ns| {
+                            var headers_iter = request.response.iterateHeaders();
+                            const retry_after_s = retry_after_s: while (headers_iter.next()) |header| {
+                                if (!std.ascii.eqlIgnoreCase(header.name, "Retry-After")) continue;
+
+                                // The spec reads like only a number of seconds is allowed,
+                                // not an HTTP date as is also allowed by the HTTP spec.
+                                break :retry_after_s std.fmt.parseUnsigned(u64, header.value, 10) catch continue;
+                            } else null;
+
+                            const delay_ns = if (retry_after_s) |ras|
+                                ras * std.time.ns_per_s
+                            else
+                                backoff_ns;
+
+                            const do_retry = if (timeout_ms) |t_ms|
+                                delay_ns <= remaining_ns: {
+                                    break :remaining_ns t_ms * std.time.ns_per_ms -| timer.?.read();
+                                }
+                            else
+                                true;
+
+                            if (do_retry) {
+                                std.time.sleep(delay_ns);
+                                continue :retry;
+                            }
+                        },
+                        else => {},
+                    }
+
+                    if (diagnostics) |d|
+                        d.* = try parseHttpResponseBody(rpc.Status, allocator, &request, .{});
+
+                    return switch (class) {
+                        else => comptime unreachable,
+                        .client_error => error.ClientError,
+                        .server_error => error.ServerError,
+                    };
+                },
+                else => return try parseHttpResponseBody(S.Response(), allocator, &request, .{}),
+            }
         }
     }
 
