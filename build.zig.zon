@@ -18,6 +18,10 @@
             .url = "https://github.com/dermetfan/utils.zig/archive/6ccb68f3a580ac410cf4bcbee36640d9b775f199.tar.gz",
             .hash = "12206e36547ef3e40d75496f5c6279b41538dd14186e291f220603001ed712901f90",
         },
+        .retry = .{
+            .url = "https://github.com/dermetfan/zig-retry/archive/dc5d51cfdb7f8f830f6ae51bd65c10ee065be63d.tar.gz",
+            .hash = "1220693e4f93c4fcf8d5c6ea38cd4f3316ff095f7344f157f57f0af956dbceec7f3b",
+        },
     },
     .paths = .{
         "build.zig",
