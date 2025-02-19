@@ -10,8 +10,18 @@ pub fn build(b: *Build) !void {
         .optimize = b.standardOptimizeOption(.{}),
     };
 
+    const w3c_baggage_mod = b.addModule("w3c-baggage", .{
+        .root_source_file = b.path("src/w3c/baggage.zig"),
+        .target = options.target,
+        .optimize = options.optimize,
+        .imports = &.{
+            .{ .name = "utils", .module = b.dependency("utils", options).module("utils") },
+        },
+    });
+    _ = w3c_baggage_mod; // autofix
+
     const w3c_trace_context_mod = b.addModule("w3c-trace-context", .{
-        .root_source_file = b.path("src/w3c-trace-context.zig"),
+        .root_source_file = b.path("src/w3c/trace-context.zig"),
         .target = options.target,
         .optimize = options.optimize,
         .imports = &.{
@@ -84,7 +94,7 @@ pub fn build(b: *Build) !void {
     });
 
     const test_step = b.step("test", "Run unit tests");
-    inline for (.{ "w3c-trace-context", "api", "sdk", "otlp" }) |mod_name| {
+    inline for (.{ "w3c-baggage", "w3c-trace-context", "api", "sdk", "otlp" }) |mod_name| {
         const mod = b.modules.get(mod_name).?;
 
         const mod_test = utils.addModuleTest(b, mod, .{
