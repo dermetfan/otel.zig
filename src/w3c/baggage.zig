@@ -19,20 +19,50 @@ pub const InvalidKeyError = error{InvalidBaggageKey};
 
 /// https://www.w3.org/TR/baggage/#value
 pub const Value = struct {
-    value: []const u8,
+    value: std.Uri.Component,
     /// https://www.w3.org/TR/baggage/#property
+    /// Same ownership rules around percent-encoding apply as to `value`.
     properties: Properties = .{},
 
-    pub const Properties = std.StringArrayHashMapUnmanaged(?[]const u8);
+    pub const Properties = std.StringArrayHashMapUnmanaged(?std.Uri.Component);
 
     pub const string_property_separator = ";";
     pub const string_property_assignment = "=";
 
     pub const InvalidError = InvalidKeyError || error{InvalidBaggageValue};
 
-    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        self.properties.deinit(allocator);
+    pub fn deinit(
+        self: *@This(),
+        allocator: std.mem.Allocator,
+        keys_and_values: bool,
+    ) void {
+        if (keys_and_values)
+            deinitValue(allocator, self.value);
+        deinitProperties(allocator, &self.properties, keys_and_values);
         self.* = undefined;
+    }
+
+    pub fn deinitValue(allocator: std.mem.Allocator, value: std.Uri.Component) void {
+        switch (value) {
+            inline else => |v| allocator.free(v),
+        }
+    }
+
+    pub fn deinitProperties(
+        allocator: std.mem.Allocator,
+        properties: *Properties,
+        keys_and_values: bool,
+    ) void {
+        if (keys_and_values) {
+            var iter = properties.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                if (entry.value_ptr.*) |value|
+                    deinitValue(allocator, value);
+            }
+        }
+
+        properties.deinit(allocator);
     }
 
     pub fn validate(self: @This()) InvalidError!void {
@@ -46,24 +76,39 @@ pub const Value = struct {
         }
     }
 
-    pub fn validateValue(value: []const u8) InvalidError!void {
-        // An empty value is allowed but this might change:
-        // https://github.com/w3c/baggage/issues/135
-        for (value) |char| switch (char) {
-            0x21, 0x23...0x2B, 0x2D...0x3A, 0x3C...0x5B, 0x5D...0x7E => {},
-            else => return error.InvalidBaggageValue,
-        };
+    pub fn validateValue(value: std.Uri.Component) InvalidError!void {
+        switch (value) {
+            .raw => |string| {
+                // An empty value is allowed but this might change:
+                // https://github.com/w3c/baggage/issues/135
+                for (string) |char|
+                    if (!isValidValueChar(char))
+                        return error.InvalidBaggageValue;
+            },
+            .percent_encoded => {},
+        }
     }
 
     fn isValidValueChar(char: u8) bool {
-        return !std.meta.isError(validateValue(&.{char}));
+        return switch (char) {
+            0x21, 0x23...0x2B, 0x2D...0x3A, 0x3C...0x5B, 0x5D...0x7E => true,
+            else => false,
+        };
+    }
+
+    /// Writes the percent-encoded form.
+    fn valueToString(value: std.Uri.Component, writer: anytype) @TypeOf(writer).Error!void {
+        switch (value) {
+            .raw => |string| try std.Uri.Component.percentEncode(writer, string, isValidValueChar),
+            .percent_encoded => |string| try writer.writeAll(string),
+        }
     }
 
     pub fn toString(self: @This(), writer: anytype) @TypeOf(writer).Error!void {
         if (comptime @TypeOf(writer) == std.ArrayListUnmanaged(u8).Writer)
             try writer.context.self.ensureUnusedCapacity(writer.context.allocator, self.stringLength());
 
-        try std.Uri.Component.percentEncode(writer, self.value, isValidValueChar);
+        try valueToString(self.value, writer);
 
         var iter = self.properties.iterator();
         while (iter.next()) |entry| {
@@ -72,24 +117,29 @@ pub const Value = struct {
 
             if (entry.value_ptr.*) |value| {
                 try writer.writeAll(string_property_assignment);
-                try std.Uri.Component.percentEncode(writer, value, isValidValueChar);
+                try valueToString(value, writer);
             }
         }
     }
 
-    fn percentEncodedValueStringLength(value: []const u8) usize {
-        var string_len = value.len;
-        for (value) |char| {
-            if (isValidValueChar(char)) continue;
-            // A percent-encoded character always takes up three bytes like %XX.
-            string_len += 2;
+    fn valueStringLength(value: std.Uri.Component) usize {
+        switch (value) {
+            .raw => |string| {
+                var string_len = string.len;
+                for (string) |char| {
+                    if (isValidValueChar(char)) continue;
+                    // A percent-encoded character always takes up three bytes like %XX.
+                    string_len += 2;
+                }
+                return string_len;
+            },
+            .percent_encoded => |string| return string.len,
         }
-        return string_len;
     }
 
     /// The number of bytes that `toString()` will write.
     pub fn stringLength(self: @This()) usize {
-        var string_len = percentEncodedValueStringLength(self.value);
+        var string_len = valueStringLength(self.value);
 
         if (self.properties.count() != 0) {
             var iter = self.properties.iterator();
@@ -104,21 +154,21 @@ pub const Value = struct {
 
     pub fn propertyKvStringLength(kv: Properties.KV) usize {
         return kv.key.len + if (kv.value) |value|
-            string_property_assignment.len + percentEncodedValueStringLength(value)
+            string_property_assignment.len + valueStringLength(value)
         else
             0;
     }
 
-    // TODO percent-encoding
     pub fn fromString(
         allocator: std.mem.Allocator,
         string: []const u8,
     ) (PropertyStringIterator.Error || std.mem.Allocator.Error)!@This() {
         var value_props_iter = std.mem.splitSequence(u8, string, string_property_separator);
 
-        const value = value_props_iter.next() orelse
-            return error.UnexpectedEndOfInput;
-        try Value.validateValue(value);
+        const value = .{ .percent_encoded = value_props_iter.first() };
+        try validateValue(value);
+
+        std.debug.print(">> Value.fromString()-next() = \"{s}\":\"{s}\"\n", .{ value.percent_encoded, value_props_iter.rest() });
 
         const properties = try propertiesFromString(allocator, value_props_iter.rest());
         errdefer properties.deinit(allocator);
@@ -142,12 +192,13 @@ pub const Value = struct {
 
             try validateKey(kv.key);
 
+            const value = std.Uri.Component{ .percent_encoded = kv.value };
+            if (!value.isEmpty())
+                try validateValue(value);
+
             return .{
                 .key = kv.key,
-                .value = if (kv.value.len != 0) value: {
-                    try validateValue(kv.value);
-                    break :value kv.value;
-                } else null,
+                .value = if (value.isEmpty()) null else value,
             };
         }
 
@@ -170,63 +221,97 @@ pub const Value = struct {
         return properties;
     }
 
+    pub const CloneDupeOptions = union(enum) {
+        shallow,
+        /// See `cloneValue()`.
+        /// Applies to all values and property values.
+        value_kind: ?std.meta.Tag(std.Uri.Component),
+    };
+
     pub fn clone(
         self: @This(),
         allocator: std.mem.Allocator,
-        dupe: bool,
+        dupe: CloneDupeOptions,
     ) std.mem.Allocator.Error!@This() {
-        if (!dupe) return .{
-            .value = self.value,
-            .properties = try self.properties.clone(allocator),
-        };
+        switch (dupe) {
+            .shallow => return .{
+                .value = self.value,
+                .properties = try self.properties.clone(allocator),
+            },
+            .value_kind => |value_kind| {
+                const value = try cloneValue(allocator, self.value, value_kind);
+                errdefer deinitValue(allocator, value);
 
-        const value = try allocator.dupe(u8, self.value);
-        errdefer allocator.free(value);
+                var properties = Properties{};
+                errdefer deinitProperties(allocator, &properties, true);
 
-        var properties = Properties{};
-        errdefer {
-            var iter = properties.iterator();
-            while (iter.next()) |entry| {
-                allocator.free(entry.key_ptr.*);
-                if (entry.value_ptr.*) |v|
-                    allocator.free(v);
-            }
+                try properties.ensureTotalCapacity(allocator, self.properties.count());
 
-            properties.deinit(allocator);
+                var iter = self.properties.iterator();
+                while (iter.next()) |entry| {
+                    const property_key = try allocator.dupe(u8, entry.key_ptr.*);
+                    errdefer allocator.free(property_key);
+
+                    const property_value = if (entry.value_ptr.*) |v| try cloneValue(allocator, v, value_kind) else null;
+                    errdefer if (property_value) |v| deinitValue(allocator, v);
+
+                    properties.putAssumeCapacity(property_key, property_value);
+                }
+
+                return .{
+                    .value = value,
+                    .properties = properties,
+                };
+            },
         }
+    }
 
-        try properties.ensureTotalCapacity(allocator, self.properties.count());
+    pub fn cloneValue(
+        allocator: std.mem.Allocator,
+        value: std.Uri.Component,
+        /// The kind of value to return.
+        /// Null means the same as the input.
+        value_kind: ?std.meta.Tag(std.Uri.Component),
+    ) std.mem.Allocator.Error!std.Uri.Component {
+        const actual_kind = if (value_kind) |kind| kind else std.meta.activeTag(value);
+        return switch (actual_kind) {
+            .raw => .{ .raw = try std.fmt.allocPrint(allocator, "{raw}", .{value}) },
+            .percent_encoded => .{
+                .percent_encoded = percent_encoded: {
+                    const percent_encoded = try allocator.alloc(u8, valueStringLength(value));
+                    errdefer allocator.free(percent_encoded);
 
-        var iter = self.properties.iterator();
-        while (iter.next()) |entry| {
-            const property_key = try allocator.dupe(u8, entry.key_ptr.*);
-            errdefer allocator.free(property_key);
+                    var stream = std.io.fixedBufferStream(percent_encoded);
+                    valueToString(value, stream.writer()) catch |err| switch (err) {
+                        // We precisely allocated the correct amount of memory using `valueStringLength()`.
+                        error.NoSpaceLeft => unreachable,
+                    };
 
-            const property_value = if (entry.value_ptr.*) |v|
-                try allocator.dupe(u8, v)
-            else
-                null;
-            errdefer if (property_value) |v| allocator.free(v);
-
-            properties.putAssumeCapacity(property_key, property_value);
-        }
-
-        return .{
-            .value = value,
-            .properties = properties,
+                    break :percent_encoded percent_encoded;
+                },
+            },
         };
     }
 };
 
-pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-    for (self.entries.values()) |*value|
-        value.deinit(allocator);
+pub fn deinit(
+    self: *@This(),
+    allocator: std.mem.Allocator,
+    keys_and_values: bool,
+) void {
+    var iter = self.entries.iterator();
+    while (iter.next()) |entry| {
+        if (keys_and_values)
+            allocator.free(entry.key_ptr.*);
+        entry.value_ptr.deinit(allocator, keys_and_values);
+    }
     self.entries.deinit(allocator);
     self.* = undefined;
 }
 
 /// https://datatracker.ietf.org/doc/html/rfc7230#section-3.2.6
 pub fn validateKey(key: []const u8) InvalidKeyError!void {
+    std.debug.print(">>{s}<<\n", .{key});
     if (key.len == 0 or for (key) |char| switch (char) {
         '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~' => break false,
         else => |c| if (std.ascii.isAlphanumeric(c)) break false,
@@ -330,20 +415,20 @@ pub fn toString(self: @This(), writer: anytype) @TypeOf(writer).Error!void {
     }
 }
 
-// https://www.w3.org/TR/baggage/#example
+// TODO https://www.w3.org/TR/baggage/#example
 test toString {
     const allocator = std.testing.allocator;
 
     var self = @This(){};
-    defer self.deinit(allocator);
+    defer self.deinit(allocator, false);
 
-    try self.entries.put(allocator, "key-1", .{ .value = "value-1" });
+    try self.entries.put(allocator, "key-1", .{ .value = .{ .raw = "value-1" } });
     try self.entries.put(allocator, "key-2", .{
-        .value = "value-2",
+        .value = .{ .percent_encoded = "value-2" },
         .properties = try Value.Properties.init(
             allocator,
             &.{ "property-key-1", "property-key-2" },
-            &.{ null, "property-value" },
+            &.{ null, .{ .raw = "property-value" } },
         ),
     });
 
@@ -450,9 +535,11 @@ fn KVStringIterator(
             const key = pair_iter.next() orelse
                 return error.UnexpectedEndOfInput;
 
+            std.debug.print(">> KVStringIterator.next() = \"{s}\":\"{s}\"\n", .{ key, pair_iter.rest() });
+
             return .{
                 .key = key,
-                // The value may contain `str_property_assignment`:
+                // The value may contain `str_assignment`:
                 // https://www.w3.org/TR/baggage/#value
                 .value = pair_iter.rest(),
             };
@@ -469,66 +556,73 @@ pub fn fromString(
     string: []const u8,
 ) (StringIterator.Error || std.mem.Allocator.Error)!@This() {
     var self = @This(){};
-    errdefer self.deinit(allocator);
+    errdefer self.deinit(allocator, false);
 
     var string_iter = StringIterator.init(string);
     while (try string_iter.next()) |entry| {
-        var value = try Value.fromString(allocator, entry.value_with_properties);
-        errdefer value.deinit(allocator);
+        std.debug.print(">> fromString()-next() = \"{s}\":\"{s}\"\n", .{ entry.key, entry.value_with_properties });
 
-        try self.put(allocator, entry.key, value);
+        var value = try Value.fromString(allocator, entry.value_with_properties);
+        errdefer value.deinit(allocator, false);
+
+        try self.entries.put(allocator, entry.key, value);
     }
 
     return self;
 }
 
+// TODO https://www.w3.org/TR/baggage/#example
+test fromString {
+    var self = try fromString(
+        std.testing.allocator,
+        "key-1=value-1," ++
+            "key-2=value-2;" ++
+            "property-key-1;" ++
+            "property-key-2=property-value",
+    );
+    defer self.deinit(std.testing.allocator, false);
+
+    try std.testing.expectEqual(2, self.entries.count());
+    {
+        const value = self.entries.get("key-1").?;
+        try std.testing.expectEqualDeep(std.Uri.Component{ .percent_encoded = "value-1" }, value.value);
+        try std.testing.expectEqual(0, value.properties.count());
+    }
+    {
+        const value = self.entries.get("key-2").?;
+        try std.testing.expectEqualDeep(std.Uri.Component{ .percent_encoded = "value-2" }, value.value);
+        try std.testing.expectEqual(2, value.properties.count());
+        try std.testing.expectEqualDeep(std.Uri.Component{ .percent_encoded = "property-value" }, value.properties.get("property-key-1").?);
+        try std.testing.expectEqualDeep(null, value.properties.get("property-key-2").?);
+    }
+}
+
+test "roundtrip" {
+    // TODO
+}
+
 pub fn clone(
     self: @This(),
     allocator: std.mem.Allocator,
-    dupe: bool,
+    dupe: Value.CloneDupeOptions,
 ) std.mem.Allocator.Error!@This() {
-    if (!dupe) return .{
-        .entries = try self.entries.clone(allocator),
-    };
+    var copy = @This(){};
+    errdefer copy.deinit(allocator, dupe != .shallow);
 
-    var entries = Entries{};
-    errdefer {
-        if (dupe) {
-            var iter = entries.iterator();
-            while (iter.next()) |entry| {
-                allocator.free(entry.key_ptr.*);
-                allocator.free(entry.value_ptr.value);
-            }
-        }
-
-        entries.deinit(allocator);
-    }
-
-    try entries.ensureTotalCapacity(allocator, self.entries.count());
+    try copy.entries.ensureTotalCapacity(allocator, self.entries.count());
 
     var iter = self.entries.iterator();
     while (iter.next()) |entry| {
-        const key = if (dupe) try allocator.dupe(u8, entry.key_ptr.*) else entry.key_ptr.*;
-        errdefer if (dupe) allocator.free(key);
+        const key = if (dupe != .shallow) try allocator.dupe(u8, entry.key_ptr.*) else entry.key_ptr.*;
+        errdefer if (dupe != .shallow) allocator.free(key);
 
         const value = try entry.value_ptr.clone(allocator, dupe);
-        errdefer {
-            if (dupe) {
-                var props_iter = value.properties.iterator();
-                while (props_iter.next()) |property| {
-                    allocator.free(property.key_ptr.*);
-                    if (property.value_ptr.*) |v|
-                        allocator.free(v);
-                }
-            }
+        errdefer value.deinit(dupe != .shallow);
 
-            value.deinit();
-        }
-
-        entries.putAssumeCapacity(key, value);
+        copy.entries.putAssumeCapacity(key, value);
     }
 
-    return .{ .entries = entries };
+    return copy;
 }
 
 test {
