@@ -434,7 +434,7 @@ pub fn pruneCallback(
         if (self.entries.count() == 1)
             return error.BaggageLimitsTooAggressive;
 
-        const kv = self.entries.pop();
+        const kv = self.entries.pop().?;
 
         string_len -= kvStringLength(kv);
         if (self.entries.count() != 0)

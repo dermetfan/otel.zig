@@ -1,26 +1,28 @@
 .{
-    .name = "otel",
+    .name = .otel,
     .version = "0.0.0",
+    .fingerprint = 0x4d774a54ae2d599a,
+    .minimum_zig_version = "0.14.0",
     .dependencies = .{
         .protobuf = .{
-            .url = "https://github.com/Arwalk/zig-protobuf/archive/8b47dc349a36a42c1827f6d83ec05d8130376061.tar.gz",
-            .hash = "122010e351b1d81348b87a913111e238dd555ff087a0a3dcd42ab7ca30cb8fa9076d",
+            .url = "https://github.com/Arwalk/zig-protobuf/archive/5ae85ea07dcc415682fc7c23497bf2a602d2d27b.tar.gz",
+            .hash = "protobuf-2.0.0-0e82auljGwD8GabbCgDJ1jbwK48SDvqZFmji4BCgg5Fn",
         },
         .@"opentelemetry-proto" = .{
             .url = "https://github.com/open-telemetry/opentelemetry-proto/archive/refs/tags/v1.3.2.tar.gz",
-            .hash = "122089fe2a917c05d4944ead1e926d553088e45fc30a7b985dbf806f18e0f7f0cee0",
+            .hash = "N-V-__8AAGIJBQCJ_iqRfAXUlE6tHpJtVTCI5F_DCnuYXb-A",
         },
         .googleapis = .{
             .url = "https://github.com/googleapis/googleapis/archive/40bc86036e483ab04e5bc83ac7519e15d68cbd05.tar.gz",
-            .hash = "1220239ce3c0f33bcd41fe9c69b0ce3da5b819b67d288cba2d652bb0e27c0ad69452",
+            .hash = "N-V-__8AAG89ygMjnOPA8zvNQf6cabDOPaW4GbZ9KIy6LWUr",
         },
         .utils = .{
-            .url = "https://github.com/dermetfan/utils.zig/archive/2a8dcdc25c1cfb987eef328bfede65bb4f1df81d.tar.gz",
-            .hash = "12206ebfe099d4e25ed5ac840a93842ab00c834c6932ba47f50f6b57646fc9afc1e4",
+            .url = "https://github.com/dermetfan/utils.zig/archive/ae3bc56c1b202ed6392ab8738e097bdf4ade449f.tar.gz",
+            .hash = "utils-0.0.0-5JJlDy7OAgAtvfg62xlL_jKJ6AI8X_dzHvxWkxGRgKzY",
         },
         .retry = .{
-            .url = "https://github.com/dermetfan/zig-retry/archive/dc5d51cfdb7f8f830f6ae51bd65c10ee065be63d.tar.gz",
-            .hash = "1220693e4f93c4fcf8d5c6ea38cd4f3316ff095f7344f157f57f0af956dbceec7f3b",
+            .url = "https://github.com/dermetfan/zig-retry/archive/117abc26560d0e7c5cb5a5f467ed979d64461331.tar.gz",
+            .hash = "retry-0.1.0-qMWcfaxGAAC-KUD7GFrVKZ5PH6Zp5gVF6-XWrDhZpq-P",
         },
     },
     .paths = .{

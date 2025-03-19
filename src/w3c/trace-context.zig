@@ -130,7 +130,7 @@ pub const TraceParent = struct {
             return std.mem.bytesToValue(@This(), &(try hexToBytes(hex)));
         }
 
-        pub fn toInt(self: @This()) @typeInfo(@This()).Struct.backing_integer.? {
+        pub fn toInt(self: @This()) @typeInfo(@This()).@"struct".backing_integer.? {
             return @bitCast(self);
         }
 
@@ -520,7 +520,7 @@ pub const TraceState = struct {
                     self.sort();
                     sorted = true;
                 }
-                const kv = self.entries.pop();
+                const kv = self.entries.pop().?;
 
                 string_len -= kvStringLength(kv);
 

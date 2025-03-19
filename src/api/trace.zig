@@ -200,7 +200,7 @@ pub fn Span(comptime Impl: type) type {
             self.impl.deinit();
 
             switch (@typeInfo(@TypeOf(self))) {
-                .Pointer => |pointer| {
+                .pointer => |pointer| {
                     if (!pointer.is_const)
                         self.* = undefined;
                 },

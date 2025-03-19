@@ -251,7 +251,7 @@ const RecordingSpan = struct {
         // See `RefCount` in `std.atomic.Value`'s `test Value`
         // for an explanation on the atomic order.
         if (self.refcount.fetchSub(1, .release) == 1) {
-            self.refcount.fence(.acquire);
+            _ = self.refcount.load(.acquire);
 
             {
                 self.refcount_pool_mutex.lock();
@@ -378,7 +378,7 @@ pub const SequentialIdGenerator = struct {
 
     fn IdInt(Id: type) type {
         const info = @typeInfo(std.meta.FieldType(Id, .bytes));
-        return std.meta.Int(.unsigned, info.Array.len * @typeInfo(info.Array.child).Int.bits);
+        return std.meta.Int(.unsigned, info.array.len * @typeInfo(info.array.child).int.bits);
     }
 
     pub inline fn idGenerator(self: anytype, comptime iface: utils.meta.IfaceCtx) IdGenerator(iface.Type(@This())) {
@@ -832,18 +832,18 @@ pub fn MultiSpanProcessor(
         }
 
         pub fn onStart(self: @This(), span: *Span, parent_context: void) void {
-            inline for (@typeInfo(Processors).Struct.fields) |field| {
+            inline for (@typeInfo(Processors).@"struct".fields) |field| {
                 @field(self.processors, field.name).onStart(span, parent_context);
             }
         }
 
         pub fn onEnding(self: @This(), span: *Span) void {
-            inline for (@typeInfo(Processors).Struct.fields) |field|
+            inline for (@typeInfo(Processors).@"struct".fields) |field|
                 @field(self.processors, field.name).onEnding(span);
         }
 
         pub fn onEnd(self: *@This(), span: Span) void {
-            const fields = @typeInfo(Processors).Struct.fields;
+            const fields = @typeInfo(Processors).@"struct".fields;
 
             // Every processor incremented the reference count in `onEnding()`, including ourselves.
             std.debug.assert(span.impl.refcount.load(.monotonic) == fields.len + 1);
@@ -867,7 +867,7 @@ pub fn MultiSpanProcessor(
         fn shutdownOrForceFlush(self: *@This(), comptime which: enum { shutdown, force_flush }, timeout_ms: ?u32) error{Timeout}!void {
             var timed_out = false;
 
-            const fields = @typeInfo(Processors).Struct.fields;
+            const fields = @typeInfo(Processors).@"struct".fields;
 
             const each_timeout_ms = if (timeout_ms) |t_ms|
                 (if (std.math.cast(u32, fields.len)) |num_processors|
@@ -1510,7 +1510,7 @@ pub const OtlpSpanExporter = struct {
 
 fn testSpan(tracer: anytype) !Span {
     // Must be a pointer so that the returned span does not point to stack memory.
-    _ = api.Tracer(@typeInfo(@TypeOf(tracer)).Pointer.child);
+    _ = api.Tracer(@typeInfo(@TypeOf(tracer)).pointer.child);
 
     var span = span: {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

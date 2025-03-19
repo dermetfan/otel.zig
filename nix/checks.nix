@@ -11,7 +11,7 @@
         ../src
       ];
 
-      zigDepsHash = "sha256-f/wJqnPvkmJDeT+DYQjikSbtp4bhwMymDxZvUFHUqEM=";
+      zigDepsHash = "sha256-x6xjO4mdHOrgNky6EQuM2xwy0Wl9PzK0TJXmtBXJYws=";
 
       zigRelease = "ReleaseSafe";
 

@@ -527,12 +527,12 @@ pub const Exporter = struct {
         error{ NotEnoughData, InvalidInput } ||
         std.json.ParseError(std.json.Reader(std.json.default_buffer_size, std.http.Client.Request.Reader)) ||
         error{
-        // Unfortunately `std.io.Reader.readAllAlloc()` does not expose a named error set.
-        StreamTooLong,
+            // Unfortunately `std.io.Reader.readAllAlloc()` does not expose a named error set.
+            StreamTooLong,
 
-        UnsupportedContentType,
-        NoContentType,
-    };
+            UnsupportedContentType,
+            NoContentType,
+        };
 
     fn parseHttpResponseBody(
         /// A protobuf type.
